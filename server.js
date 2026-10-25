@@ -105,7 +105,6 @@ export function createApp({ queryFn = sdkQuery } = {}) {
         systemPrompt: systemText,
         tools: [],                                   // no built-in tools: everything runs on the client
         mcpServers: { [MCP_NAME]: { type: 'sdk', name: MCP_NAME, instance: mcp } },
-        allowedTools: [`${PREFIX}*`],
         canUseTool: async (_n, input) => ({ behavior: 'allow', updatedInput: input }),
         includePartialMessages: true,
         settingSources: [],
@@ -124,12 +123,14 @@ export function createApp({ queryFn = sdkQuery } = {}) {
         if (m.session_id) s.sdkSessionId = m.session_id;
         if (m.type === 'stream_event' && !m.parent_tool_use_id) forward(s, m.event);
         else if (m.type === 'result') {
+          console.log(`result subtype=${m.subtype} is_error=${m.is_error}${m.errors ? ' errors=' + m.errors.join('; ') : ''}${m.result && m.is_error ? ' ' + m.result : ''}`);
           if (m.is_error && s.sink) s.sink.error(m.errors?.join('; ') || m.subtype || 'agent error');
           s.sink?.finish();
           s.resultWaiters.splice(0).forEach((r) => r());
         }
       }
     } catch (e) {
+      console.error('agent error:', e);
       s.sink?.error(String(e?.message || e));
     } finally {
       s.dead = true; sessions.delete(s.key);
