@@ -217,7 +217,10 @@ export function createApp({ queryFn = sdkQuery } = {}) {
   const server = http.createServer(async (req, res) => {
     try {
       const token = (req.headers['x-api-key'] || '') || String(req.headers.authorization || '').replace(/^Bearer /, '');
-      if (API_KEY && token !== API_KEY) return err(res, 401, 'invalid api key');
+      if (API_KEY && token !== API_KEY) {
+        console.warn(`401 ${req.method} ${req.url} from ${req.socket.remoteAddress}: got key ${token ? `"${token.slice(0, 3)}…" (len ${token.length})` : '(none)'}, expected len ${API_KEY.length}; auth headers: ${Object.keys(req.headers).filter((h) => /key|auth/i.test(h)).join(', ') || '(none)'}`);
+        return err(res, 401, 'invalid api key');
+      }
       const url = req.url.split('?')[0];
 
       if (req.method === 'GET' && url === '/v1/models')
