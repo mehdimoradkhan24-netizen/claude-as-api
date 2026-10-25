@@ -7,6 +7,8 @@ rem ===== Settings (edit these) =====
 set PORT=8787
 set PROXY_API_KEY=change-me-to-a-long-random-key
 set CLAUDE_MODEL=claude-sonnet-5-5
+rem IPs allowed to call with an EMPTY key (VS Code on system B sends none). Comma separated.
+set TRUSTED_IPS=10.237.201.222
 rem =================================
 
 where node >nul 2>nul || (echo [!] Node.js 18+ is not installed. Get it from https://nodejs.org & pause & exit /b 1)

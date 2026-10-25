@@ -20,6 +20,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const API_KEY = process.env.PROXY_API_KEY || '';          // empty = no auth
 const DEFAULT_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-5-5';
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MIN || 60) * 60_000;
+const TRUSTED_IPS = (process.env.TRUSTED_IPS || '').split(',').map((x) => x.trim()).filter(Boolean);   // may call with an empty key
 const LOG_FILE = process.env.LOG_FILE ?? 'claude-as-api.log';      // empty = console only
 const LOG_BODY_MAX = Number(process.env.LOG_BODY_MAX || 3000);   // chars of request body to log (0 = none)
 const MCP_NAME = 'client';
@@ -241,7 +242,7 @@ export function createApp({ queryFn = sdkQuery } = {}) {
     try {
       const token = (req.headers['x-api-key'] || '') || String(req.headers.authorization || '').replace(/^Bearer /, '');
       const loopback = /^(::1|(::ffff:)?127\.0\.0\.1)$/.test(req.socket.remoteAddress || '');
-      if (API_KEY && token !== API_KEY && !(loopback && !token)) {   // empty key is accepted from this machine only
+      if (API_KEY && token !== API_KEY && !(!token && (loopback || TRUSTED_IPS.includes('*') || TRUSTED_IPS.includes((req.socket.remoteAddress || '').replace(/^::ffff:/, ''))))) {   // empty key accepted from loopback and TRUSTED_IPS only
         rl('WARN', `401 got key ${token ? `"${token.slice(0, 3)}…" (len ${token.length})` : '(none)'}, expected len ${API_KEY.length}`);
         return err(res, 401, 'invalid api key');
       }
