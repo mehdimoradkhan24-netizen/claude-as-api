@@ -8,6 +8,7 @@
 //    stop_reason "tool_use" and the MCP handler stays pending until the client sends the
 //    matching tool_result in its next request.
 import http from 'node:http';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
@@ -19,11 +20,23 @@ const HOST = process.env.HOST || '0.0.0.0';
 const API_KEY = process.env.PROXY_API_KEY || '';          // empty = no auth
 const DEFAULT_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-5-5';
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MIN || 60) * 60_000;
+const LOG_FILE = process.env.LOG_FILE ?? 'claude-as-api.log';      // empty = console only
+const LOG_BODY_MAX = Number(process.env.LOG_BODY_MAX || 3000);   // chars of request body to log (0 = none)
 const MCP_NAME = 'client';
 const PREFIX = `mcp__${MCP_NAME}__`;
 
 // Clients (VS Code) send their own model *id* (e.g. "SystemA_s5.5"); only real Claude names go to the SDK.
 const sdkModel = (m) => (/^(claude-|sonnet|opus|haiku|fable|default)/i.test(m || '') ? m : DEFAULT_MODEL);
+
+const stamp = () => new Date().toISOString();
+function log(level, msg) {
+  const line = `${stamp()} ${level} ${msg}`;
+  (level === 'ERR' ? console.error : level === 'WARN' ? console.warn : console.log)(line);
+  if (LOG_FILE) fs.appendFile(LOG_FILE, line + '\n', () => {});
+}
+const redact = (h) => Object.fromEntries(Object.entries(h).map(([k, v]) => [k, /key|auth|cookie/i.test(k) ? `<${String(v).length} chars>` : v]));
+const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…(+${s.length - n})` : s);
+let reqCounter = 0;
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex').slice(0, 16);
 const blocksOf = (c) => (typeof c === 'string' ? [{ type: 'text', text: c }] : c || []);
@@ -123,14 +136,14 @@ export function createApp({ queryFn = sdkQuery } = {}) {
         if (m.session_id) s.sdkSessionId = m.session_id;
         if (m.type === 'stream_event' && !m.parent_tool_use_id) forward(s, m.event);
         else if (m.type === 'result') {
-          console.log(`result subtype=${m.subtype} is_error=${m.is_error}${m.errors ? ' errors=' + m.errors.join('; ') : ''}${m.result && m.is_error ? ' ' + m.result : ''}`);
+          log('INFO', `result subtype=${m.subtype} is_error=${m.is_error}${m.errors ? ' errors=' + m.errors.join('; ') : ''}${m.result && m.is_error ? ' ' + m.result : ''}`);
           if (m.is_error && s.sink) s.sink.error(m.errors?.join('; ') || m.result || m.subtype || 'agent error');
           s.sink?.finish();
           s.resultWaiters.splice(0).forEach((r) => r());
         }
       }
     } catch (e) {
-      console.error('agent error:', e);
+      log('ERR', `agent error: ${e?.stack || e}`);
       s.sink?.error(String(e?.message || e));
     } finally {
       s.dead = true; sessions.delete(s.key);
@@ -220,11 +233,16 @@ export function createApp({ queryFn = sdkQuery } = {}) {
   const readBody = (req) => new Promise((ok, no) => { let d = ''; req.on('data', (c) => (d += c)); req.on('end', () => { try { ok(JSON.parse(d || '{}')); } catch (e) { no(httpError(400, 'invalid JSON')); } }); });
 
   const server = http.createServer(async (req, res) => {
+    const rid = ++reqCounter, t0 = Date.now();
+    const rl = (level, msg) => log(level, `#${rid} ${msg}`);
+    rl('INFO', `--> ${req.method} ${req.url} from ${req.socket.remoteAddress} host=${req.headers.host} headers=${JSON.stringify(redact(req.headers))}`);
+    res.on('finish', () => rl(res.statusCode >= 400 ? 'WARN' : 'INFO', `<-- ${res.statusCode} in ${Date.now() - t0}ms`));
+    res.on('close', () => { if (!res.writableFinished) rl('WARN', `connection closed before response finished after ${Date.now() - t0}ms`); });
     try {
       const token = (req.headers['x-api-key'] || '') || String(req.headers.authorization || '').replace(/^Bearer /, '');
       const loopback = /^(::1|(::ffff:)?127\.0\.0\.1)$/.test(req.socket.remoteAddress || '');
       if (API_KEY && token !== API_KEY && !(loopback && !token)) {   // empty key is accepted from this machine only
-        console.warn(`401 ${req.method} ${req.url} from ${req.socket.remoteAddress}: got key ${token ? `"${token.slice(0, 3)}…" (len ${token.length})` : '(none)'}, expected len ${API_KEY.length}; auth headers: ${Object.keys(req.headers).filter((h) => /key|auth/i.test(h)).join(', ') || '(none)'}`);
+        rl('WARN', `401 got key ${token ? `"${token.slice(0, 3)}…" (len ${token.length})` : '(none)'}, expected len ${API_KEY.length}`);
         return err(res, 401, 'invalid api key');
       }
       const url = req.url.split('?')[0];
@@ -238,7 +256,8 @@ export function createApp({ queryFn = sdkQuery } = {}) {
       if (req.method !== 'POST' || url !== '/v1/messages') return err(res, 404, 'not found');
 
       const body = await readBody(req);
-      console.log(`${req.method} ${url} model=${JSON.stringify(body.model)} stream=${!!body.stream} msgs=${(body.messages || []).length} tools=${(body.tools || []).length}`);
+      rl('INFO', `body model=${JSON.stringify(body.model)} stream=${!!body.stream} msgs=${(body.messages || []).length} tools=${(body.tools || []).length} tool_names=${(body.tools || []).map((t) => t.name).slice(0, 8).join(',')}${(body.tools || []).length > 8 ? ',…' : ''}`);
+      if (LOG_BODY_MAX) rl('DEBUG', `body ${clip(JSON.stringify(body), LOG_BODY_MAX)}`);
       const wantStream = !!body.stream;
       let events = [], done, failure;
       const finished = new Promise((r) => (done = r));
@@ -248,9 +267,10 @@ export function createApp({ queryFn = sdkQuery } = {}) {
       const sink = {
         event(ev) {
           if (ev.type === 'message_start') sawMessage = true;
+          if (ev.type !== 'content_block_delta') rl('DEBUG', `sse ${ev.type}${ev.delta?.stop_reason ? ' stop_reason=' + ev.delta.stop_reason : ''}`);
           if (wantStream) { start(); res.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`); } else events.push(ev);
         },
-        error(m) { failure = m; },
+        error(m) { failure = m; rl('ERR', `agent failure: ${m}`); },
         finish() { done(); },
       };
       const s = await handle(body, req.headers, sink);
@@ -261,7 +281,7 @@ export function createApp({ queryFn = sdkQuery } = {}) {
       // Clients like Copilot show "no choices" for an empty reply, so surface errors as visible text.
       if (!sawMessage) {
         const text = `[claude-as-api error] ${failure || 'agent returned no output (check server console)'}`;
-        console.error(text);
+        log('ERR', text);
         const synth = [
           { type: 'message_start', message: { id: `msg_${sha(text + Date.now())}`, type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } },
           { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
@@ -281,6 +301,7 @@ export function createApp({ queryFn = sdkQuery } = {}) {
       if (failure) return err(res, 500, failure);
       send(res, 200, assemble(events));
     } catch (e) {
+      rl('ERR', `handler error: ${e?.stack || e}`);
       if (!res.headersSent) err(res, e.status || 500, e.message); else res.end();
     }
   });
@@ -289,6 +310,7 @@ export function createApp({ queryFn = sdkQuery } = {}) {
     for (const [k, s] of sessions) if (!s.pending.size && Date.now() - s.lastUsed > SESSION_TTL_MS) { s.input.close(); s.query.close?.(); sessions.delete(k); }
   }, 60_000);
   gc.unref();
+  server.on('clientError', (e, sock) => { log('WARN', `clientError: ${e.message}`); sock.destroy(); });
   server.on('close', () => { clearInterval(gc); for (const s of sessions.values()) { s.input.close(); s.query.close?.(); } });
   return server;
 }
@@ -318,5 +340,5 @@ function assemble(events) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   createApp().listen(PORT, HOST, () =>
-    console.log(`Anthropic-compatible endpoint: http://${HOST}:${PORT}/v1/messages  (model ${DEFAULT_MODEL}${API_KEY ? ', key required' : ', NO auth'})`));
+    log('INFO', `Anthropic-compatible endpoint: http://${HOST}:${PORT}/v1/messages  (model ${DEFAULT_MODEL}${API_KEY ? ', key required' : ', NO auth'}; log file ${LOG_FILE || 'off'})`));
 }

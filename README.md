@@ -25,3 +25,7 @@ curl http://<IP-A>:8787/v1/messages -H "x-api-key: KEY" -H "content-type: applic
 ## متغیرها
 `PORT`, `HOST`, `PROXY_API_KEY` (خالی = بدون احراز هویت)، `CLAUDE_MODEL`, `SESSION_TTL_MIN`.
 `npm test` یک تست آفلاین با SDK ساختگی اجرا می‌کند.
+
+## لاگ
+هر درخواست (هدرها با کلید پنهان‌شده، بدنه، رویدادهای SSE، وضعیت و زمان پاسخ، خطاها) هم در کنسول و هم در `claude-as-api.log` ثبت می‌شود.
+متغیرها: `LOG_FILE` (خالی = فقط کنسول)، `LOG_BODY_MAX` (تعداد کاراکتر بدنهٔ لاگ‌شده؛ پیش‌فرض ۳۰۰۰، `0` = بدون بدنه).
