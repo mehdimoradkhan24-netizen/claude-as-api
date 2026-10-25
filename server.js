@@ -124,7 +124,7 @@ export function createApp({ queryFn = sdkQuery } = {}) {
         if (m.type === 'stream_event' && !m.parent_tool_use_id) forward(s, m.event);
         else if (m.type === 'result') {
           console.log(`result subtype=${m.subtype} is_error=${m.is_error}${m.errors ? ' errors=' + m.errors.join('; ') : ''}${m.result && m.is_error ? ' ' + m.result : ''}`);
-          if (m.is_error && s.sink) s.sink.error(m.errors?.join('; ') || m.subtype || 'agent error');
+          if (m.is_error && s.sink) s.sink.error(m.errors?.join('; ') || m.result || m.subtype || 'agent error');
           s.sink?.finish();
           s.resultWaiters.splice(0).forEach((r) => r());
         }
@@ -203,7 +203,8 @@ export function createApp({ queryFn = sdkQuery } = {}) {
         s.pending.delete(id);
       }
     } else {
-      let content = blocksOf(last.content).filter((b) => b.type !== 'tool_result');
+      // the client's cache_control markers clash with the ones the SDK adds itself (ttl ordering 400)
+      let content = blocksOf(last.content).filter((b) => b.type !== 'tool_result').map(({ cache_control, ...b }) => b);
       if (fresh && msgs.length > 1)
         content = [{ type: 'text', text: `Conversation so far:\n${renderHistory(msgs.slice(0, -1))}\n\nCurrent message:` }, ...content];
       s.input.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null });
