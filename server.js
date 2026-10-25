@@ -22,6 +22,9 @@ const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MIN || 60) * 60_000;
 const MCP_NAME = 'client';
 const PREFIX = `mcp__${MCP_NAME}__`;
 
+// Clients (VS Code) send their own model *id* (e.g. "SystemA_s5.5"); only real Claude names go to the SDK.
+const sdkModel = (m) => (/^(claude-|sonnet|opus|haiku|fable|default)/i.test(m || '') ? m : DEFAULT_MODEL);
+
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex').slice(0, 16);
 const blocksOf = (c) => (typeof c === 'string' ? [{ type: 'text', text: c }] : c || []);
 const textOf = (c) => blocksOf(c).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
@@ -98,7 +101,7 @@ export function createApp({ queryFn = sdkQuery } = {}) {
     s.query = queryFn({
       prompt: s.input,
       options: {
-        model: body.model || DEFAULT_MODEL,
+        model: sdkModel(body.model),
         systemPrompt: systemText,
         tools: [],                                   // no built-in tools: everything runs on the client
         mcpServers: { [MCP_NAME]: { type: 'sdk', name: MCP_NAME, instance: mcp } },
@@ -233,6 +236,7 @@ export function createApp({ queryFn = sdkQuery } = {}) {
       if (req.method !== 'POST' || url !== '/v1/messages') return err(res, 404, 'not found');
 
       const body = await readBody(req);
+      console.log(`${req.method} ${url} model=${JSON.stringify(body.model)} stream=${!!body.stream} msgs=${(body.messages || []).length} tools=${(body.tools || []).length}`);
       const wantStream = !!body.stream;
       let events = [], done, failure;
       const finished = new Promise((r) => (done = r));
