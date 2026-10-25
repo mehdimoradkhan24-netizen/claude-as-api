@@ -243,8 +243,10 @@ export function createApp({ queryFn = sdkQuery } = {}) {
       const finished = new Promise((r) => (done = r));
       let started = false;
       const start = () => { if (started || !wantStream) return; started = true; res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' }); };
+      let sawMessage = false;
       const sink = {
         event(ev) {
+          if (ev.type === 'message_start') sawMessage = true;
           if (wantStream) { start(); res.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`); } else events.push(ev);
         },
         error(m) { failure = m; },
@@ -255,6 +257,21 @@ export function createApp({ queryFn = sdkQuery } = {}) {
       await finished;
       if (s.sink === sink) s.sink = null;
 
+      // Clients like Copilot show "no choices" for an empty reply, so surface errors as visible text.
+      if (!sawMessage) {
+        const text = `[claude-as-api error] ${failure || 'agent returned no output (check server console)'}`;
+        console.error(text);
+        const synth = [
+          { type: 'message_start', message: { id: `msg_${sha(text + Date.now())}`, type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } },
+          { type: 'message_stop' },
+        ];
+        if (wantStream) { start(); for (const ev of synth) res.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`); return res.end(); }
+        return send(res, 200, assemble(synth));
+      }
       if (wantStream) {
         start();
         if (failure) res.write(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: failure } })}\n\n`);
