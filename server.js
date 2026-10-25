@@ -217,7 +217,8 @@ export function createApp({ queryFn = sdkQuery } = {}) {
   const server = http.createServer(async (req, res) => {
     try {
       const token = (req.headers['x-api-key'] || '') || String(req.headers.authorization || '').replace(/^Bearer /, '');
-      if (API_KEY && token !== API_KEY) {
+      const loopback = /^(::1|(::ffff:)?127\.0\.0\.1)$/.test(req.socket.remoteAddress || '');
+      if (API_KEY && token !== API_KEY && !(loopback && !token)) {   // empty key is accepted from this machine only
         console.warn(`401 ${req.method} ${req.url} from ${req.socket.remoteAddress}: got key ${token ? `"${token.slice(0, 3)}…" (len ${token.length})` : '(none)'}, expected len ${API_KEY.length}; auth headers: ${Object.keys(req.headers).filter((h) => /key|auth/i.test(h)).join(', ') || '(none)'}`);
         return err(res, 401, 'invalid api key');
       }

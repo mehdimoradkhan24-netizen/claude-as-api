@@ -33,7 +33,7 @@ netsh advfirewall firewall show rule name="claude-as-api" >nul 2>nul || netsh ad
 
 echo.
 echo ===== Use this on system B =====
-for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do echo   Base URL: http:%%a:%PORT%
+for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do for /f "tokens=*" %%b in ("%%a") do echo   Base URL: http://%%b:%PORT%/v1/messages
 echo   API key : %PROXY_API_KEY%
 echo ================================
 echo.
